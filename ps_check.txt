@@ -1,0 +1,258 @@
+#!/bin/bash
+# This is created on 2021-03-15
+# This is for testing 
+# Author Walter Yao
+
+# TODO  https://www.shellcheck.net/
+# TODO
+
+# set extend variable ,exit on undefine variable,exit on error, exit on pipefail
+
+#set -xueo pipefail
+#set -e
+
+# Define globle variables
+# control print debug information by [[ $MY_DEBUG = 1 ]] && echo something
+MY_DEBUG=1
+MY_FILE=2.txt
+export RED='\033[0;31m'
+export GREEN='\033[0;32m'
+export NC='\033[0m' # No Color
+
+#
+#1. The datapath panic issue                     (TEE-703 LKB 000180636)
+#2. The RSCN address format 3 issue                     (TEE-559/TEE-567 OKB SLN322862 )
+#3. Node rebooted because of timeout failure with a non-critical service.             (TEE-690/TEE-713 LKB 000180125)
+#4. Cluster shutdown results in node reboot.                     (TEE-598/TEE-847)
+#5. "Foreign Drive" alert on cache drive showed after both nodes restarted at same time. "xtremapp-pm" NVME: DRV:0_0_24 SN:82266324DE9 Warning - signature mismatch    
+#    (TEE-590/TEE-784/TEE-833 LKB 000179969)
+#6. SupportAssist stop sending materials to DellEMC after primary node reboot.               (OKB SLN322350)
+# 7.  MD panic,  Though the enhancement has been added into Powerstore Sp3, still see it, TEE-923
+
+
+############## FUNCTION ############
+
+function disk_check()
+{
+local choice_num
+local disk_num
+while true
+do 
+echo -e "${GREEN}check disk state"
+echo "1) disk state"
+echo "2) offline disk list"
+echo "3) "
+echo "4) "
+echo "5) "
+
+read -r -p "please inpput your choice(x to return):" choice_num
+
+case $choice_num in
+1)
+   echo -e "${NC}"
+   read  -p "please inpput disk number B_E_S:" disk_number
+   echo check $disk_number
+   grep $disk_number   node_?/command_output/svc_diag_list_--show_drives.txt
+   
+   # formalize disk number, use "-" instead of "_"
+   disk_number_middle=${disk_number//_/-}
+   
+   # check disk state
+   grep $disk_number_middle   node_?/command_output/cli.py_dc_plugin_dump_backend.txt
+   grep $disk_number   node_?/command_output/cli.py_dc_plugin_dump_raid_summary.txt
+   grep $disk_number   node_?/command_output/housemd/show_drives_basic_print_type__csv_.txt 
+  
+      ;;
+2)
+    echo -e "${NC} Checking offline disks in Datapath"
+    grep offline  node_?/command_output/cli.py_dc_plugin_dump_backend.txt
+       ;;
+3)
+   ./cyc_triage.pl -b . -j -- -t kernel |grep  "Fabric was affected. Addr format 3"
+    [[ $? ]] && echo "RSCN issue found"   ;;
+4)
+    psAnalyzeReboot
+    [[ $? ]] && echo "psAnalyzeReboot"
+    ;;
+5)
+   ./cyc_triage.pl -b . -j -- -t control-path|grep  "Remote support config file /cyc_cfs/service/EsrsConfig.json not present"
+   [[ $? ]] && echo "eve error TEE948"
+    ;;
+x)
+                return
+                ;; 
+*)
+    echo "select"
+    ;;
+esac
+
+done
+}
+
+
+
+
+function pst_check()
+{
+local num
+while true
+do 
+
+echo "check known issue"
+echo "1) Node failhanle panic"
+echo "2) MD flush panic"
+echo "3) RSCN issue"
+echo "4) psAnalyzeReboot"
+echo "5) EVE NOT work"
+
+read -r -p "please inpput your choice(x to return):" num
+
+case $num in
+1)
+   ./cyc_triage.pl -b . -j -- -t ha_monitor_bsc |grep "forcing start of BSCFailHandler@cyc.db_space_check.service"
+    [[ $? ]] || echo "!!!!!!! panic found"
+  
+    ;;
+2)
+    ./cyc_triage.pl -b . -j -- -t panic_log  |grep -i "md_flush_request\|blocked for more than"
+    [[ $? ]] && echo "md flsuh found"
+       ;;
+3)
+   ./cyc_triage.pl -b . -j -- -t kernel |grep  "Fabric was affected. Addr format 3"
+    [[ $? ]] && echo "RSCN issue found"   ;;
+4)
+    psAnalyzeReboot
+    [[ $? ]] && echo "psAnalyzeReboot"
+    ;;
+5)
+   ./cyc_triage.pl -b . -j -- -t control-path|grep  "Remote support config file /cyc_cfs/service/EsrsConfig.json not present"
+   [[ $? ]] && echo "eve error TEE948"
+    ;;
+x)
+                return
+                ;; 
+*)
+    echo "select"
+    ;;
+esac
+
+done
+}
+
+
+## display mlu lun property 
+function mlu_prop()
+{
+
+declare -i i=0
+declare -i j=0
+declare -a a_mlu=("")
+local   lun_index="" 
+#local line1
+<<EOF
+while read line1
+do
+  	a_mlu[j]="${line1}"
+	((j++))
+done < 1
+
+EOF
+
+# -t <<< mapfile deletes return new line at the end. if not use -t, it needs handlt it  later in string part
+mapfile -t a_mlu < $MY_FILE
+
+#clear
+#echo ${a_mlu[@]}
+# get length ${#array[@]}
+# index  ${!array[@]}
+
+j=${#a_mlu[@]}
+
+[[ $MY_DEBUG = 1 ]] && echo "array length is $j"
+
+while true
+do
+    read -r -p "please input property to check,x to exit:" lun_index
+	
+    if [ -z "$lun_index" ];then
+	    echo "please input correct selection"
+#		break
+     continue
+	else
+	    if [ "$lun_index" = "x" ]; then
+	    return
+        fi	
+	  
+    fi	
+
+	
+    for ((i=0;i<j;i++))
+	do
+#     find_head=${a_mlu[i]#*:}
+      find_head=${a_mlu[i]#*:}
+	  
+# delete space,tab,return and lineFeed
+#	  find_head=${find_head//[ $'\t\r\n']/}
+	  
+	  find_head=${find_head// /}
+#      find_flag=$(expr index "${a_mlu[i]}" "$lun_index")  	
+  
+# here [[]] doesn't work, must use []   
+         if [[ $find_head = ${lun_index} ]]; then
+#		 [[ "${a_mlu[i]}" =~ "$lun_index" ]] && echo "${a_mlu[i]}"
+             echo "${a_mlu[i]}"
+		     echo "${a_mlu[i+2]}"
+		     echo "${a_mlu[i+3]}"
+#		 find_flag=true 
+		    break
+         fi
+	
+	done
+	
+done
+}
+
+##################Main###############
+function main() 
+{
+while true
+do
+        
+        echo -e "${GREEN}1)one-mlu "
+        echo "2)two-pst"
+        echo "3)disk-check"
+        echo "4)four"
+        echo -e "x)Exit ${NC}"
+        read -r -p "input your selection:" num
+
+        case $num in
+            1) 
+                echo "you select mlu_porp $num"
+ #call funtion to check mlu 
+                 mlu_prop
+                ;;
+            2)
+                echo "your selection is $num"
+                pst_check 
+                ;;
+            3)
+                echo "your selection is $num"
+				        disk_check
+                ;;
+            4)
+                echo "your selection is $num"
+                ;;
+            x)
+                exit
+                ;;           
+		   *)
+                echo "you selection $num is not exist"
+                ;;
+        esac
+done
+}
+
+#Call function main
+main "$@"
+
+

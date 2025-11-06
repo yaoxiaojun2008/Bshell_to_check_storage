@@ -1,0 +1,177 @@
+#!/bin/bash
+# PERSONALLY USE ONLY， BE CAREFUL TO RUN IN PROCUTION, FOR UNITY storage.
+#This is created on 2021-04-12 # This is for testing # Author Walter Yao
+# TODO  https://www.shellcheck.net/
+# TODO  https://github.com/yaoxiaojun2008/pure-bash-bible
+#usage: ldapscheck   hostname(or hoostIP) port netrace
+# when sepcify netrace, tcpdump will be captured
+# the check will test with 389,636,3268,3269
+#### example
+#env LDAPTLS_CACERT=/EMC/backend/CEM/LDAPCer/serverCertificate.cer ldapsearch  -x  -d 1  -v  -H ldaps://$ldap_host:636 \
+#-b "CN=Walter Yao,CN=Users,dc=peeps,dc=lab" -D "CN=Administrator,CN=Users,DC=peeps,DC=lab"  -w Password123#
+### openssl s_client -connect  host:port -status -msg
+######
+
+export RED='\033[0;31m'
+export GREEN='\033[0;32m'
+export NC='\033[0m' # No Color
+
+declare -a failmsg
+declare -a cmd_out
+declare -a succmsg
+declare -a action_plan
+declare -a ldap_step
+declare CMD_RESULT=walter_output
+declare CMD_LOG=walter_ldap.log
+declare SEARCH_BASE="CN=Walter Yao,CN=Users,dc=peeps,dc=lab"
+declare SEARCH_BIND="CN=Administrator,CN=Users,DC=peeps,DC=lab"
+declare SEARCH_PWD="-w Password123#"    # -W to input password interactively
+declare SEARCH_PORT="636"
+declare SEARCH_PROTOCOL="ldaps"
+declare UNITY_LDAP_CRT="env LDAPTLS_CACERT=/EMC/backend/CEM/LDAPCer/serverCertificate.cer"  # set "" to ignore checking saved certificate
+declare ldap_host=""
+
+failmsg=(
+"dap_connect_to_host: getaddrinfo failed: Name or service not known"
+"connect errno"
+"TLS: could not load verify locations (file:"
+"TLS trace: SSL_connect:error in SSLv2/v3 write client hello"  #step 4
+"TLS trace: SSL_connect:error in SSLv2/v3 read server hello"
+"TLS certificate verification: Error"
+"ldap_bind: Invalid credentials"
+"result: 32 No such object"
+)
+
+succmsg=(
+"ldap_connect_to_host: Trying"
+"connect success"
+"TLS trace: SSL_connect:SSLv2/v3 write client hello"
+"TLS trace: SSL_connect:SSLv2/v3 write client hello"  #step4
+"TLS trace: SSL_connect:SSLv3 read server hello"
+"TLS trace: SSL_connect:SSLv3 read server certificate"
+"res_errno: 0, res_error: <>, res_matched: <>"
+"result: 0 Success"
+)
+
+
+action_plan=(
+"STEP 1# IP is not resolved,Please check DNS sever or local setting /etc/hosts /etc/resolv.conf  /etc/nsswitch.conf or capture tcpdump"
+"STEP 2# TCP connection failed, please check ping IP , port number by telnet or svc_networkcheck -tpc"
+"STEP 3# TLS Check client side uploaded  certificate exists or not"
+"STEP 4# TLS handshake failed at initlization, please check firewall or server access control, capture tcpdump"
+"STEP 5# TLS handshake failed at initlization, please check firewall or server access control, capture tcpdump"
+"STEP 6# TLS certificate issue,Please upload a CORRECT certificate to Unity, or specify certificate by env LDAPTLS_CACERT=fielloation in ldapsearch"
+"STEP 7# Bind user and password issue, please check user and password"
+"STEP 8# user is not found,check search base and user name"
+
+)
+
+ldap_step=(
+"STEP 1# Resolve name to IP by  DNS sever or local setting /etc/hosts /etc/resolv.conf  /etc/nsswitch.conf or capture tcpdump"
+"STEP 2# Establish TCP connection"
+"STEP 3# TLS Check client side uploaded  certificate in /EMC/backend/CEM/LDAPCer/serverCertificate.cer"
+"STEP 4# TLS handshake,The client sends a Client hello message to the server"
+"STEP 5# TLS handshake,The server responds by sending a server hello message to the client"
+"STEP 6# TLS The server sends its certificate to the client for authentication,client checks it with /EMC/backend/CEM/LDAPCer/serverCertificate.cer"
+"STEP 7# LDAP server checks Bind user and password provided by client"
+"STEP 8# LDAP server checks specified user"
+)
+
+search_failure() {
+for ((i=0;i<${#failmsg[@]};i++))
+do
+       if  [[ "$1" =~ "${failmsg[i]}" ]]; then
+           echo "Error message <<<<<<< ""$1"
+           echo -e "${RED}""LDAP/LDAPS FAILED AT ""${action_plan[i]}""${NC}"
+           return 0
+       fi
+done
+
+return 1
+}
+
+
+search_success() {
+    for ((i=0;i<${#succmsg[@]};i++))
+do
+       if  [[ "$1" =~ "${succmsg[i]}" ]]; then
+           echo "Successful message  >>>>>  ""$1"
+           echo -e "${GREEN}""LDAP/LDAPS SUCCESS AT "${ldap_step[i]}"${NC}"
+           return 0
+       fi
+done
+
+return 1
+}
+
+check_output() {
+
+[ ! -f $CMD_RESULT ] &&  echo "The log file  $CMD_RESULT is NOT found" && exit
+
+#load ldapsearch output into array
+mapfile -t cmd_out  < $CMD_RESULT
+
+#check finger prints of ldapsearch messages
+for ((j=0;j<${#cmd_out[@]};j++))
+    do
+        search_failure "${cmd_out[j]}" && break
+  #      [  $? = '0' ] &&  break
+        search_success "${cmd_out[j]}"
+     done
+#echo -e "\n<<<<<< no errors are found in first  six steps>>>>\n"
+}
+
+#### start point here
+main() {
+
+# env check
+if [ $# -lt 2 ];then
+     echo -e "For Unity array, USAGE: $0  hostname/IP port\nAbout LDAPS steps:"
+     for ((i=0;i<${#ldap_step[@]};i++))
+     do
+        echo "${ldap_step[i]}"
+    done
+    exit
+fi
+
+
+if [ "$3" = "netrace" ]; then
+    capture_time=$(date +%Y%m%d_%H%M_%S)
+    capture_file="/home/service/user/tcpdump-"$1"-"$capture_time".pcap"
+    echo -e "tcpdump -c 100 -i mgmt_vdev -w $capture_file"
+ timeout 10 tcpdump -c 200 -i mgmt_vdev -w "$capture_file" & 2>/dev/null
+#    tcpdump -c 100 -i mgmt_vdev -w $capture_file & 2>/dev/null
+    echo "wait tcpdump prepare  for 5 seconds......."
+    sleep 5
+    echo "5 seconds is up,wakeup now"
+fi
+
+[ ! -f /usr/bin/ldapsearch ] && echo "ldapsearch is not found,exiting..." && exit
+echo -e "\nThis test will be saved in FILE $CMD_RESULT, all test log will be saved in FILE $CMD_LOG"
+
+
+#check host and port,change to ldap if select 389
+ldap_host=$1
+case $2 in
+    389|3268) SEARCH_PROTOCOL="ldap"
+              SEARCH_PORT=$2;;
+    636|3269) SEARCH_PORT=$2;;
+    *)
+     echo  "Invalid  port  number $2 is specified"
+     exit;;
+esac
+
+# clean temp file
+if [ -f $CMD_RESULT ]; then
+    cat $CMD_RESULT >> $CMD_LOG
+    rm  $CMD_RESULT
+fi
+
+#RUN COMMAND
+$($UNITY_LDAP_CRT ldapsearch  -x  -d 1  -v  -H $SEARCH_PROTOCOL://$ldap_host:$SEARCH_PORT -b "$SEARCH_BASE"  -D "$SEARCH_BIND"  $SEARCH_PWD >$CMD_RESULT 2>&1)
+
+#call function to check CMD log
+check_output
+}
+
+main "$@"
