@@ -1,0 +1,87 @@
+import re
+import json
+
+def analyze_openldap_debug_log(log_text: str):
+    result = {
+        "steps": {
+            "url_parse": {"detected": False, "message": ""},
+            "tcp_connection": {"detected": False, "message": ""},
+            "tls_handshake": {"detected": False, "message": ""},
+            "certificate_verification": {
+                "depth_0": False,
+                "depth_1": False,
+                "depth_2": False
+            },
+            "sasl_bind": {"detected": False},
+            "search": {
+                "filter": None,
+                "result_code": None,
+                "entries": 0
+            }
+        },
+        "overall_status": "failed"
+    }
+
+    # --- URL Parse ---
+    if "ldap_url_parse_ext" in log_text:
+        result["steps"]["url_parse"]["detected"] = True
+        result["steps"]["url_parse"]["message"] = "ldap_url_parse_ext parsed successfully"
+
+    # --- TCP connection check ---
+    if re.search(r"connect success", log_text, re.I):
+        result["steps"]["tcp_connection"]["detected"] = True
+        result["steps"]["tcp_connection"]["message"] = "TCP connected successfully"
+
+    # --- TLS handshake ---
+    if re.search(r"SSL_connect:SSLv3 read finished", log_text):
+        result["steps"]["tls_handshake"]["detected"] = True
+        result["steps"]["tls_handshake"]["message"] = "TLS handshake completed"
+
+    # --- Certificate verification ---
+    cert_depths = re.findall(r"TLS certificate verification: depth: (\d), err: 0", log_text)
+    for d in cert_depths:
+        if d == "0":
+            result["steps"]["certificate_verification"]["depth_0"] = True
+        elif d == "1":
+            result["steps"]["certificate_verification"]["depth_1"] = True
+        elif d == "2":
+            result["steps"]["certificate_verification"]["depth_2"] = True
+
+    # --- SASL Bind ---
+    if "ldap_sasl_bind" in log_text:
+        result["steps"]["sasl_bind"]["detected"] = True
+
+    # --- LDAP Search filter ---
+    filter_match = re.search(r"# filter:\s*\((.*?)\)", log_text)
+    if filter_match:
+        result["steps"]["search"]["filter"] = filter_match.group(1)
+
+    # --- LDAP result code ---
+    rc_match = re.search(r"res_errno:\s*(\d+)", log_text)
+    if rc_match:
+        result["steps"]["search"]["result_code"] = int(rc_match.group(1))
+
+    # --- Entries (if exist) ---
+    entries = re.findall(r"searchResEntry", log_text)
+    result["steps"]["search"]["entries"] = len(entries)
+
+    # --- Determine overall status ---
+    if (
+        result["steps"]["url_parse"]["detected"]
+        and result["steps"]["tcp_connection"]["detected"]
+        and result["steps"]["tls_handshake"]["detected"]
+        and result["steps"]["sasl_bind"]["detected"]
+        and result["steps"]["search"]["result_code"] == 0
+    ):
+        result["overall_status"] = "success"
+
+    return json.dumps(result, indent=4, ensure_ascii=False)
+
+
+# ------------------------------
+# Example usage:
+# ------------------------------
+if __name__ == "__main__":
+    with open("ldap.log", "r") as f:
+        log_data = f.read()
+    print(analyze_openldap_debug_log(log_data))
