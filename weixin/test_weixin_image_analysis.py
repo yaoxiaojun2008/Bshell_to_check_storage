@@ -13,8 +13,8 @@ import io
 from PIL import Image
 
 # 微信API配置
-WECHAT_APP_ID = "wx7829dcea67e05a04"
-WECHAT_APP_SECRET = "878b604f3c2b32c4a918b406c089c543"
+WECHAT_APP_ID = "your IP"
+WECHAT_APP_SECRET = "your serect"
 
 # 微信API端点
 TOKEN_URL = "https://api.weixin.qq.com/cgi-bin/token"
@@ -317,4 +317,5 @@ def main():
     print("=" * 60)
 
 if __name__ == "__main__":
+
     main()
